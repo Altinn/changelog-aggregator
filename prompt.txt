@@ -1,0 +1,75 @@
+You are given the output from a changelog aggregation run.
+
+The input is a machine-oriented text format. It contains:
+- Run metadata near the top, such as organization, ISO week when present, and date/timestamp period bounds.
+- One or more repository sections.
+- One or more commit sections per repository.
+- `ADDED_LINES_START` / `ADDED_LINES_END` blocks containing only lines newly added to changelog files.
+- Optional error sections.
+
+Your task is to turn that input into a concise, human-readable Markdown changelog digest.
+
+Produce Markdown only.
+
+Requirements:
+
+1. Title
+- Use a clear H1 title such as:
+  `# Altinn Changelog - week {week_number}`
+- If no ISO week is present, use:
+  `# Altinn Changelog - {from_date} to {to_date}`
+
+2. Metadata summary
+- Add a short metadata section near the top.
+- Include:
+  - organization
+  - ISO week if present
+  - date range covered by the aggregation
+  - number of repositories represented, if inferable
+  - number of commits represented, if inferable
+- If errors are present, mention that the digest may be incomplete and summarize the affected repositories briefly.
+
+3. Executive highlights
+- Add a section titled:
+  `## Executive Highlights`
+- Create a short bullet list of only:
+  - genuinely new end-user or developer-facing features
+  - prominent or high-impact bug fixes
+  - major behavioral changes likely to matter across teams
+- Merge duplicate or overlapping entries across repositories where appropriate.
+- Keep bullets concise and outcome-focused.
+- Omit low-signal items such as:
+  - dependency bumps
+  - package version updates
+  - build, CI, formatting, linting, documentation-only, release-process, and chore entries
+  - routine internal refactors unless the changelog text clearly indicates a meaningful external effect
+
+4. Detailed changes
+- Add a section titled:
+  `## Detailed Changes`
+- Group details by repository.
+- For each repository, use:
+  `### <repo name>`
+- Under each repository, include only meaningful feature additions and notable bug fixes found in the added changelog lines.
+- Prefer short normalized bullets over copying raw changelog fragments.
+- Preserve important specificity where available, such as affected API area, workflow, integration, or user-visible behavior.
+- If a repository has no meaningful entries after filtering, omit that repository entirely.
+
+5. Provenance and caution
+- Base the summary only on the supplied input.
+- Do not invent missing context.
+- If an entry is ambiguous, summarize conservatively or omit it.
+- Do not treat commit messages alone as sufficient evidence unless they directly clarify clearly relevant changelog lines.
+- Changelog lines are primary; commit metadata is supporting context.
+
+6. Style
+- Write for humans who want a useful digest, not an exhaustive audit trail.
+- Be concise, direct, and specific.
+- Avoid hype and vague wording.
+- Prefer active, concrete wording.
+
+7. Output rules
+- Output the final Markdown document only.
+- Do not include analysis, caveats outside the requested Markdown, or code fences.
+
+Now process the following changelog aggregation output and produce the Markdown digest:
