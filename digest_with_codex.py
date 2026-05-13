@@ -15,7 +15,7 @@ def usage() -> str:
 
 def build_prompt(script_dir: Path) -> str:
     prompt_path = script_dir / "prompt.txt"
-    repo_names_path = script_dir / ".changelog-aggregator" / "reponames.json"
+    repo_names_path = script_dir / "reponames.json"
 
     if not prompt_path.exists():
         raise SystemExit(f"Prompt file not found: {prompt_path}")

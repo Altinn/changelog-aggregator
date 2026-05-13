@@ -200,6 +200,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Alias for --discover.",
     )
     parser.add_argument(
+        "--refresh-reponames",
+        action="store_true",
+        help="Regenerate root-level reponames.json from the current discovery index.",
+    )
+    parser.add_argument(
         "--output",
         help=(
             "Write report to this file. Defaults to a period-named file under "
@@ -396,10 +401,14 @@ def default_repo_display_name(repo: dict[str, Any]) -> str:
     return repo["full_name"]
 
 
-def sync_repo_names(cache_dir: Path, index: dict[str, Any], progress: Progress) -> dict[str, str]:
-    names_path = cache_dir / REPO_NAMES_FILE
+def sync_repo_names(
+    names_path: Path,
+    index: dict[str, Any],
+    progress: Progress,
+    force_refresh: bool = False,
+) -> dict[str, str]:
     existing: dict[str, str] = {}
-    if names_path.exists():
+    if names_path.exists() and not force_refresh:
         try:
             raw = json.loads(names_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
@@ -416,7 +425,7 @@ def sync_repo_names(cache_dir: Path, index: dict[str, Any], progress: Progress) 
             merged[full_name] = default_repo_display_name(repo)
             changed = True
 
-    if changed or not names_path.exists():
+    if force_refresh or changed or not names_path.exists():
         write_json(names_path, merged)
         progress.log(f"Wrote repository display names to {names_path}.")
     else:
@@ -831,7 +840,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     progress.log("Using GITHUB_TOKEN authentication." if client.token else "No GITHUB_TOKEN set; using unauthenticated GitHub API requests.")
     index = load_or_discover_index(client, args.org, cache_dir, force_discovery, progress)
-    repo_names = sync_repo_names(cache_dir, index, progress)
+    repo_names = sync_repo_names(Path(REPO_NAMES_FILE), index, progress, args.refresh_reponames)
     additions, release_notes, errors = aggregate(client, index, period, progress)
 
     if args.format == "json":

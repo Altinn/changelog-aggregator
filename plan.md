@@ -14,7 +14,7 @@ Build a CLI changelog aggregator that discovers public repositories under `altin
 - On first run, discover public GitHub repos in the org and search for likely changelog files such as `CHANGELOG.md`, `changelog.md`, `RELEASES.md`, `RELEASE_NOTES.md`, and `docs/CHANGELOG.md`.
 - During discovery, also detect `.github/release.yml` and treat published GitHub Releases as a second changelog source for those repositories.
 - Store discovery results in `.changelog-aggregator/changelogs.json`.
-- Store editable repository display names in `.changelog-aggregator/reponames.json`, defaulting each value to the full repository key so `key != value` identifies real overrides. Duplicate display-name values are allowed so related repositories can collapse into one logical digest section.
+- Store editable repository display names in root-level `reponames.json`, defaulting each value to the full repository key so `key != value` identifies real overrides. Duplicate display-name values are allowed so related repositories can collapse into one logical digest section. Preserve it by default and regenerate only when `--refresh-reponames` is supplied.
 - On later runs, read `.changelog-aggregator/changelogs.json` and skip repository discovery unless rediscovery is explicitly requested.
 - Store run metadata separately in `.changelog-aggregator/state.json`.
 

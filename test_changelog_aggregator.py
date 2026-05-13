@@ -455,10 +455,27 @@ class ChangelogAggregatorTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            names = ca.sync_repo_names(Path(tmp), index, QUIET)
+            names = ca.sync_repo_names(names_path, index, QUIET)
 
             self.assertEqual("Dialogporten frontend", names["Altinn/dialogporten-frontend"])
             self.assertEqual("Altinn/new-repo", names["Altinn/new-repo"])
+
+    def test_sync_repo_names_can_force_regenerate_defaults(self):
+        index = {
+            "repos": [
+                {"full_name": "Altinn/dialogporten-frontend", "name": "dialogporten-frontend"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            names_path = Path(tmp) / ca.REPO_NAMES_FILE
+            names_path.write_text(
+                json.dumps({"Altinn/dialogporten-frontend": "Dialogporten frontend"}),
+                encoding="utf-8",
+            )
+
+            names = ca.sync_repo_names(names_path, index, QUIET, force_refresh=True)
+
+            self.assertEqual("Altinn/dialogporten-frontend", names["Altinn/dialogporten-frontend"])
 
 
 if __name__ == "__main__":

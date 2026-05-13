@@ -67,7 +67,7 @@ parse Markdown sections or infer release structure from changelog contents.
 Repository display names are stored in:
 
 ```text
-.changelog-aggregator/reponames.json
+reponames.json
 ```
 
 The file is generated automatically with each repository's full repository key
@@ -75,6 +75,14 @@ as the default display name. Edit values manually to produce clearer
 human-facing digest headings without changing the repository identifiers. Multiple
 repositories may intentionally map to the same display name, which lets related
 subcomponents or split repositories collapse into one logical digest section.
+
+Because `reponames.json` lives at the repository root, it can be versioned. It is
+preserved by default once it exists. Regenerate it from the current discovery
+index with:
+
+```bash
+python3 changelog_aggregator.py --org altinn --week 2026-W20 --refresh-reponames
+```
 
 The script prints progress to stderr while it works, keeping stdout reserved for
 the report. Suppress progress output with:
@@ -119,7 +127,7 @@ python3 digest_with_claude.py "$RUN" digest.md
 
 Both helper scripts:
 - load `prompt.txt`
-- replace `{{REPONAMES}}` using only overridden mappings from `.changelog-aggregator/reponames.json`, where an override means `key != value`
+- replace `{{REPONAMES}}` using only overridden mappings from `reponames.json`, where an override means `key != value`
 - append the aggregation run content
 - invoke the selected agent in non-interactive mode
 
