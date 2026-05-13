@@ -131,4 +131,11 @@ Both helper scripts:
 - append the aggregation run content
 - invoke the selected agent in non-interactive mode
 
+The shared prompt builder can also be used directly, including from GitHub
+Actions before invoking `openai/codex-action`:
+
+```bash
+python3 build_digest_prompt.py "$RUN" .generated/codex-digest-prompt.md
+```
+
 Set `GITHUB_TOKEN` to increase GitHub API limits.

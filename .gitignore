@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 .changelog-aggregator/
 report.md
+digest-*.md

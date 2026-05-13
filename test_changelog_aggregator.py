@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import changelog_aggregator as ca
+import build_digest_prompt as bdp
 
 
 QUIET = ca.Progress(quiet=True)
@@ -476,6 +477,35 @@ class ChangelogAggregatorTests(unittest.TestCase):
             names = ca.sync_repo_names(names_path, index, QUIET, force_refresh=True)
 
             self.assertEqual("Altinn/dialogporten-frontend", names["Altinn/dialogporten-frontend"])
+
+    def test_build_digest_prompt_injects_only_repo_name_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            prompt_path = tmp_path / "prompt.txt"
+            repo_names_path = tmp_path / "reponames.json"
+            run_path = tmp_path / "run.txt"
+
+            prompt_path.write_text("Mappings:\n{{REPONAMES}}\nRun:\n", encoding="utf-8")
+            repo_names_path.write_text(
+                json.dumps(
+                    {
+                        "Altinn/default": "Altinn/default",
+                        "Altinn/dialogporten-frontend": "Dialogporten frontend",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_path.write_text("RUN_CONTENT\n", encoding="utf-8")
+
+            prompt = bdp.build_prompt(run_path, prompt_path=prompt_path, repo_names_path=repo_names_path)
+
+            self.assertNotIn("{{REPONAMES}}", prompt)
+            self.assertIn(
+                "Replace repository heading `Altinn/dialogporten-frontend` with `Dialogporten frontend`.",
+                prompt,
+            )
+            self.assertNotIn("Replace repository heading `Altinn/default`", prompt)
+            self.assertTrue(prompt.endswith("RUN_CONTENT\n"))
 
 
 if __name__ == "__main__":
