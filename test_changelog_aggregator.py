@@ -44,7 +44,15 @@ class FakeDiscoveryClient:
                 {},
             )
         if "/repos/altinn/repo-a/git/trees/main" in url:
-            return ({"tree": [{"type": "blob", "path": "CHANGELOG.md"}]}, {})
+            return (
+                {
+                    "tree": [
+                        {"type": "blob", "path": "CHANGELOG.md"},
+                        {"type": "blob", "path": ".github/release.yml"},
+                    ]
+                },
+                {},
+            )
         if "/repos/altinn/repo-b/git/trees/master" in url:
             return ({"tree": [{"type": "blob", "path": "README.md"}]}, {})
         raise AssertionError(f"unexpected url {url}")
@@ -101,6 +109,51 @@ class EmptyRepoDiscoveryClient:
                 409,
                 url,
                 '{"message":"Git Repository is empty.","status":"409"}',
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+
+class FakeReleaseClient:
+    def __init__(self):
+        self.urls = []
+
+    def get_json(self, url):
+        self.urls.append(url)
+        if "/repos/altinn/repo-a/releases?" in url:
+            return (
+                [
+                    {
+                        "id": 1,
+                        "tag_name": "v1.2.0",
+                        "name": "v1.2.0",
+                        "html_url": "https://github.com/altinn/repo-a/releases/tag/v1.2.0",
+                        "published_at": "2026-05-13T10:00:00Z",
+                        "prerelease": False,
+                        "draft": False,
+                        "body": "## What's Changed\n- Added release notes [#42](https://github.com/altinn/repo-a/issues/42)",
+                    },
+                    {
+                        "id": 2,
+                        "tag_name": "draft",
+                        "name": "draft",
+                        "html_url": "https://github.com/altinn/repo-a/releases/tag/draft",
+                        "published_at": "2026-05-14T10:00:00Z",
+                        "prerelease": False,
+                        "draft": True,
+                        "body": "Ignore me",
+                    },
+                    {
+                        "id": 3,
+                        "tag_name": "old",
+                        "name": "old",
+                        "html_url": "https://github.com/altinn/repo-a/releases/tag/old",
+                        "published_at": "2026-04-30T10:00:00Z",
+                        "prerelease": False,
+                        "draft": False,
+                        "body": "Outside range",
+                    },
+                ],
+                {},
             )
         raise AssertionError(f"unexpected url {url}")
 
@@ -166,7 +219,7 @@ class ChangelogAggregatorTests(unittest.TestCase):
             ],
         }
 
-        additions, errors = ca.aggregate(
+        additions, release_notes, errors = ca.aggregate(
             FakeAggregationClient(),
             index,
             RANGE_PERIOD,
@@ -175,6 +228,7 @@ class ChangelogAggregatorTests(unittest.TestCase):
 
         self.assertEqual([], errors)
         self.assertEqual(1, len(additions))
+        self.assertEqual([], release_notes)
         self.assertEqual("abc123", additions[0].commit_sha)
         self.assertEqual("Update changelog", additions[0].commit_message)
         self.assertEqual(["- Added one", "+ Added literal plus"], additions[0].added_lines)
@@ -191,6 +245,7 @@ class ChangelogAggregatorTests(unittest.TestCase):
                 [repo["full_name"] for repo in index["repos"]],
             )
             self.assertEqual("CHANGELOG.md", index["repos"][0]["changelog_path"])
+            self.assertTrue(index["repos"][0]["has_release_config"])
             self.assertIsNone(index["repos"][1]["changelog_path"])
 
     def test_empty_repository_is_treated_as_no_changelog(self):
@@ -239,7 +294,14 @@ class ChangelogAggregatorTests(unittest.TestCase):
             added_lines=["## 1.0.0", "- Added"],
         )
 
-        report = ca.render_llm("altinn", RANGE_PERIOD, [addition], [])
+        report = ca.render_llm(
+            "altinn",
+            RANGE_PERIOD,
+            [addition],
+            [],
+            {"altinn/example": "Readable Example"},
+            [],
+        )
 
         self.assertIn("CHANGELOG_AGGREGATION_FORMAT_VERSION: 1", report)
         self.assertIn("PERIOD_LABEL: 2026-05-12_to_2026-05-18", report)
@@ -247,6 +309,8 @@ class ChangelogAggregatorTests(unittest.TestCase):
         self.assertIn("TO_DATE: 2026-05-18", report)
         self.assertIn("===== REPOSITORY START =====", report)
         self.assertIn("REPO: altinn/example", report)
+        self.assertIn("REPO_DISPLAY_NAME: altinn/example => Readable Example", report)
+        self.assertIn("REPO_DISPLAY_NAME: Readable Example", report)
         self.assertIn("ADDED_LINES_START\n## 1.0.0\n- Added\nADDED_LINES_END", report)
 
     def test_progress_writes_to_stderr_unless_quiet(self):
@@ -337,6 +401,64 @@ class ChangelogAggregatorTests(unittest.TestCase):
 
         self.assertTrue(any("since=2026-05-12T00%3A00%3A00Z" in url for url in client.urls))
         self.assertTrue(any("until=2026-05-18T23%3A59%3A59.999999Z" in url for url in client.urls))
+
+    def test_release_notes_include_only_published_releases_in_period(self):
+        repo = {
+            "full_name": "altinn/repo-a",
+            "url": "https://github.com/altinn/repo-a",
+        }
+
+        notes = ca.list_release_notes_for_repo(FakeReleaseClient(), repo, RANGE_PERIOD, QUIET)
+
+        self.assertEqual(1, len(notes))
+        self.assertEqual("v1.2.0", notes[0].tag_name)
+        self.assertIn("issues/42", notes[0].body)
+
+    def test_release_notes_render_with_body_block_and_display_name(self):
+        release = ca.ReleaseNote(
+            repo="altinn/repo-a",
+            repo_url="https://github.com/altinn/repo-a",
+            release_id=1,
+            tag_name="v1.2.0",
+            name="v1.2.0",
+            release_url="https://github.com/altinn/repo-a/releases/tag/v1.2.0",
+            published_at="2026-05-13T10:00:00Z",
+            prerelease=False,
+            body="## What's Changed\n- Added release notes [#42](https://github.com/altinn/repo-a/issues/42)",
+        )
+
+        report = ca.render_llm(
+            "altinn",
+            RANGE_PERIOD,
+            [],
+            [release],
+            {"altinn/repo-a": "Readable Repo A"},
+            [],
+        )
+
+        self.assertIn("===== RELEASE REPOSITORY START =====", report)
+        self.assertIn("REPO_DISPLAY_NAME: Readable Repo A", report)
+        self.assertIn("RELEASE_BODY_START", report)
+        self.assertIn("issues/42", report)
+
+    def test_sync_repo_names_writes_defaults_and_preserves_custom_values(self):
+        index = {
+            "repos": [
+                {"full_name": "Altinn/dialogporten-frontend", "name": "dialogporten-frontend"},
+                {"full_name": "Altinn/new-repo", "name": "new-repo"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            names_path = Path(tmp) / ca.REPO_NAMES_FILE
+            names_path.write_text(
+                json.dumps({"Altinn/dialogporten-frontend": "Dialogporten frontend"}),
+                encoding="utf-8",
+            )
+
+            names = ca.sync_repo_names(Path(tmp), index, QUIET)
+
+            self.assertEqual("Dialogporten frontend", names["Altinn/dialogporten-frontend"])
+            self.assertEqual("Altinn/new-repo", names["Altinn/new-repo"])
 
 
 if __name__ == "__main__":

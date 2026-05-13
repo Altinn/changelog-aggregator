@@ -19,6 +19,7 @@ from typing import Any
 
 DEFAULT_CACHE_DIR = Path(".changelog-aggregator")
 CHANGELOG_INDEX = "changelogs.json"
+REPO_NAMES_FILE = "reponames.json"
 STATE_FILE = "state.json"
 RUNS_DIR = "runs"
 API_ROOT = "https://api.github.com"
@@ -52,6 +53,7 @@ class ChangelogRepo:
     default_branch: str
     changelog_path: str | None
     found: bool
+    has_release_config: bool
 
 
 @dataclass
@@ -65,6 +67,19 @@ class ChangelogAddition:
     commit_date: str
     commit_message: str
     added_lines: list[str]
+
+
+@dataclass
+class ReleaseNote:
+    repo: str
+    repo_url: str
+    release_id: int
+    tag_name: str
+    name: str
+    release_url: str
+    published_at: str
+    prerelease: bool
+    body: str
 
 
 @dataclass
@@ -276,9 +291,13 @@ def list_public_repos(client: GitHubClient, org: str, progress: Progress) -> lis
         page += 1
 
 
-def find_changelog_path(client: GitHubClient, repo: dict[str, Any], progress: Progress) -> str | None:
+def inspect_repo_sources(
+    client: GitHubClient,
+    repo: dict[str, Any],
+    progress: Progress,
+) -> tuple[str | None, bool]:
     full_name = repo["full_name"]
-    progress.log(f"Scanning {full_name} for changelog files.")
+    progress.log(f"Scanning {full_name} for changelog files and release configuration.")
     branch = repo["default_branch"]
     encoded_branch = urllib.parse.quote(branch, safe="")
     url = f"{API_ROOT}/repos/{full_name}/git/trees/{encoded_branch}?recursive=1"
@@ -287,7 +306,7 @@ def find_changelog_path(client: GitHubClient, repo: dict[str, Any], progress: Pr
     except GitHubApiError as exc:
         if exc.status == 409 and "Git Repository is empty" in exc.detail:
             progress.log(f"Skipping {full_name}: repository is empty.")
-            return None
+            return None, False
         raise
     tree = data.get("tree", [])
     blob_paths = [
@@ -297,11 +316,15 @@ def find_changelog_path(client: GitHubClient, repo: dict[str, Any], progress: Pr
     ]
 
     paths_by_lower = {path.lower(): path for path in blob_paths}
+    has_release_config = ".github/release.yml" in paths_by_lower
+    if has_release_config:
+        progress.log(f"Found GitHub release notes configuration for {full_name}: .github/release.yml.")
+
     for preferred in PREFERRED_CHANGELOG_PATHS:
         match = paths_by_lower.get(preferred.lower())
         if match:
             progress.log(f"Found changelog for {full_name}: {match}.")
-            return match
+            return match, has_release_config
 
     candidates = [
         path
@@ -311,10 +334,15 @@ def find_changelog_path(client: GitHubClient, repo: dict[str, Any], progress: Pr
     ]
     if not candidates:
         progress.log(f"No changelog found for {full_name}.")
-        return None
+        return None, has_release_config
     match = sorted(candidates, key=lambda path: (path.count("/"), path.lower()))[0]
     progress.log(f"Found changelog for {full_name}: {match}.")
-    return match
+    return match, has_release_config
+
+
+def find_changelog_path(client: GitHubClient, repo: dict[str, Any], progress: Progress) -> str | None:
+    path, _has_release_config = inspect_repo_sources(client, repo, progress)
+    return path
 
 
 def discover_changelogs(client: GitHubClient, org: str, progress: Progress) -> dict[str, Any]:
@@ -323,7 +351,7 @@ def discover_changelogs(client: GitHubClient, org: str, progress: Progress) -> d
     public_repos = list_public_repos(client, org, progress)
     for position, repo in enumerate(public_repos, start=1):
         progress.log(f"Discovering changelog path {position}/{len(public_repos)}: {repo['full_name']}.")
-        path = find_changelog_path(client, repo, progress)
+        path, has_release_config = inspect_repo_sources(client, repo, progress)
         repos.append(
             asdict(
                 ChangelogRepo(
@@ -333,6 +361,7 @@ def discover_changelogs(client: GitHubClient, org: str, progress: Progress) -> d
                     default_branch=repo["default_branch"],
                     changelog_path=path,
                     found=path is not None,
+                    has_release_config=has_release_config,
                 )
             )
         )
@@ -361,6 +390,38 @@ def read_index(index_path: Path) -> dict[str, Any]:
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def default_repo_display_name(repo: dict[str, Any]) -> str:
+    return repo["full_name"]
+
+
+def sync_repo_names(cache_dir: Path, index: dict[str, Any], progress: Progress) -> dict[str, str]:
+    names_path = cache_dir / REPO_NAMES_FILE
+    existing: dict[str, str] = {}
+    if names_path.exists():
+        try:
+            raw = json.loads(names_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"{names_path} is invalid JSON. Fix it before running again.") from exc
+        if not isinstance(raw, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in raw.items()):
+            raise SystemExit(f"{names_path} must be a JSON object mapping repository names to display names.")
+        existing = raw
+
+    merged = dict(existing)
+    changed = False
+    for repo in index["repos"]:
+        full_name = repo["full_name"]
+        if full_name not in merged:
+            merged[full_name] = default_repo_display_name(repo)
+            changed = True
+
+    if changed or not names_path.exists():
+        write_json(names_path, merged)
+        progress.log(f"Wrote repository display names to {names_path}.")
+    else:
+        progress.log(f"Loaded repository display names from {names_path}.")
+    return merged
 
 
 def default_output_path(cache_dir: Path, output_format: str, period: Period) -> Path:
@@ -410,6 +471,52 @@ def get_commit(client: GitHubClient, repo: dict[str, Any], sha: str, progress: P
     if not isinstance(data, dict):
         raise RuntimeError(f"Unexpected commit response for {repo['full_name']}@{sha}: {data!r}")
     return data
+
+
+def parse_github_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def list_release_notes_for_repo(
+    client: GitHubClient,
+    repo: dict[str, Any],
+    period: Period,
+    progress: Progress,
+) -> list[ReleaseNote]:
+    notes: list[ReleaseNote] = []
+    page = 1
+    while True:
+        progress.log(f"Fetching published releases for {repo['full_name']}, page {page}.")
+        url = f"{API_ROOT}/repos/{repo['full_name']}/releases?per_page=100&page={page}"
+        data, _headers = client.get_json(url)
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected releases response for {repo['full_name']}: {data!r}")
+
+        for release in data:
+            published_at = release.get("published_at")
+            if release.get("draft") or not isinstance(published_at, str):
+                continue
+            published = parse_github_timestamp(published_at)
+            if not (period.start <= published <= period.end):
+                continue
+            notes.append(
+                ReleaseNote(
+                    repo=repo["full_name"],
+                    repo_url=repo["url"],
+                    release_id=int(release.get("id", 0)),
+                    tag_name=release.get("tag_name", ""),
+                    name=release.get("name") or release.get("tag_name", ""),
+                    release_url=release.get("html_url", ""),
+                    published_at=published_at,
+                    prerelease=bool(release.get("prerelease")),
+                    body=release.get("body") or "",
+                )
+            )
+
+        if len(data) < 100:
+            progress.log(f"Found {len(notes)} published releases in range for {repo['full_name']}.")
+            return notes
+        page += 1
 
 
 def extract_added_lines_from_patch(patch: str) -> list[str]:
@@ -463,13 +570,15 @@ def aggregate(
     index: dict[str, Any],
     period: Period,
     progress: Progress,
-) -> tuple[list[ChangelogAddition], list[dict[str, str]]]:
+) -> tuple[list[ChangelogAddition], list[ReleaseNote], list[dict[str, str]]]:
     additions: list[ChangelogAddition] = []
+    release_notes: list[ReleaseNote] = []
     errors: list[dict[str, str]] = []
 
     repos_with_changelogs = [
         repo for repo in index["repos"] if repo.get("found") and repo.get("changelog_path")
     ]
+    repos_with_release_notes = [repo for repo in index["repos"] if repo.get("has_release_config")]
     progress.log(f"Scanning {len(repos_with_changelogs)} cached changelog paths for changes.")
     for position, repo in enumerate(repos_with_changelogs, start=1):
         progress.log(f"Processing repository {position}/{len(repos_with_changelogs)}: {repo['full_name']}.")
@@ -484,17 +593,32 @@ def aggregate(
             errors.append({"repo": repo.get("full_name", repo.get("name", "unknown")), "error": str(exc)})
             progress.log(f"Error while processing {repo.get('full_name', repo.get('name', 'unknown'))}: {exc}")
 
+    progress.log(f"Scanning {len(repos_with_release_notes)} repositories with release-note configuration.")
+    for position, repo in enumerate(repos_with_release_notes, start=1):
+        progress.log(f"Processing release notes {position}/{len(repos_with_release_notes)}: {repo['full_name']}.")
+        try:
+            release_notes.extend(list_release_notes_for_repo(client, repo, period, progress))
+        except Exception as exc:  # noqa: BLE001 - report repo-level failures and continue.
+            errors.append({"repo": repo.get("full_name", repo.get("name", "unknown")), "error": str(exc)})
+            progress.log(f"Error while processing releases for {repo.get('full_name', repo.get('name', 'unknown'))}: {exc}")
+
     additions.sort(key=lambda item: (item.repo.lower(), item.commit_date, item.commit_sha))
+    release_notes.sort(key=lambda item: (item.repo.lower(), item.published_at, item.tag_name))
     errors.sort(key=lambda item: item["repo"].lower())
     line_count = sum(len(addition.added_lines) for addition in additions)
-    progress.log(f"Aggregation complete: {len(additions)} commits with {line_count} added lines, {len(errors)} errors.")
-    return additions, errors
+    progress.log(
+        f"Aggregation complete: {len(additions)} changelog commits with {line_count} added lines, "
+        f"{len(release_notes)} published releases, {len(errors)} errors."
+    )
+    return additions, release_notes, errors
 
 
 def render_llm(
     org: str,
     period: Period,
     additions: list[ChangelogAddition],
+    release_notes: list[ReleaseNote],
+    repo_names: dict[str, str],
     errors: list[dict[str, str]],
 ) -> str:
     output = [
@@ -508,6 +632,10 @@ def render_llm(
     ]
     if period.week:
         output.append(f"ISO_WEEK: {period.week}")
+    output.extend(["", "===== REPOSITORY DISPLAY NAMES START ====="])
+    for repo, display_name in sorted(repo_names.items(), key=lambda item: item[0].lower()):
+        output.append(f"REPO_DISPLAY_NAME: {repo} => {display_name}")
+    output.append("===== REPOSITORY DISPLAY NAMES END =====")
 
     current_repo = None
     for addition in additions:
@@ -518,6 +646,7 @@ def render_llm(
                     "",
                     "===== REPOSITORY START =====",
                     f"REPO: {addition.repo}",
+                    f"REPO_DISPLAY_NAME: {repo_names.get(addition.repo, addition.repo.rsplit('/', 1)[-1])}",
                     f"REPO_URL: {addition.repo_url}",
                     f"CHANGELOG_PATH: {addition.path}",
                     f"CHANGELOG_URL: {addition.file_url}",
@@ -541,8 +670,44 @@ def render_llm(
     if current_repo is not None:
         output.extend(["", "===== REPOSITORY END ====="])
 
+    current_release_repo = None
+    for release in release_notes:
+        if current_release_repo != release.repo:
+            current_release_repo = release.repo
+            output.extend(
+                [
+                    "",
+                    "===== RELEASE REPOSITORY START =====",
+                    f"REPO: {release.repo}",
+                    f"REPO_DISPLAY_NAME: {repo_names.get(release.repo, release.repo.rsplit('/', 1)[-1])}",
+                    f"REPO_URL: {release.repo_url}",
+                    "===== RELEASE NOTES =====",
+                ]
+            )
+        output.extend(
+            [
+                "",
+                "----- RELEASE START -----",
+                f"RELEASE_ID: {release.release_id}",
+                f"RELEASE_TAG: {release.tag_name}",
+                f"RELEASE_NAME: {release.name}",
+                f"RELEASE_URL: {release.release_url}",
+                f"RELEASE_PUBLISHED_AT: {release.published_at}",
+                f"RELEASE_PRERELEASE: {str(release.prerelease).lower()}",
+                "RELEASE_BODY_START",
+                release.body,
+                "RELEASE_BODY_END",
+                "----- RELEASE END -----",
+            ]
+        )
+
+    if current_release_repo is not None:
+        output.extend(["", "===== RELEASE REPOSITORY END ====="])
+
     if not additions:
-        output.extend(["", "NO_CHANGELOG_ADDITIONS_FOUND"])
+        output.extend(["", "NO_FILE_CHANGELOG_ADDITIONS_FOUND"])
+    if not release_notes:
+        output.extend(["", "NO_RELEASE_NOTES_FOUND"])
 
     if errors:
         output.extend(["", "===== ERRORS START ====="])
@@ -557,6 +722,8 @@ def render_json(
     org: str,
     period: Period,
     additions: list[ChangelogAddition],
+    release_notes: list[ReleaseNote],
+    repo_names: dict[str, str],
     errors: list[dict[str, str]],
 ) -> str:
     payload = {
@@ -569,7 +736,9 @@ def render_json(
             "fromTimestamp": period.start.isoformat().replace("+00:00", "Z"),
             "toTimestamp": period.end.isoformat().replace("+00:00", "Z"),
         },
+        "repositoryDisplayNames": repo_names,
         "additions": [asdict(addition) for addition in additions],
+        "releaseNotes": [asdict(release_note) for release_note in release_notes],
         "errors": errors,
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -581,6 +750,7 @@ def save_state(
     period: Period,
     index: dict[str, Any],
     additions: list[ChangelogAddition],
+    release_notes: list[ReleaseNote],
     errors: list[dict[str, str]],
 ) -> None:
     state = {
@@ -597,6 +767,7 @@ def save_state(
         "indexDiscoveredAt": index.get("discoveredAt"),
         "additionCommitCount": len(additions),
         "addedLineCount": sum(len(addition.added_lines) for addition in additions),
+        "releaseNoteCount": len(release_notes),
         "errorCount": len(errors),
     }
     write_json(state_path, state)
@@ -660,18 +831,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     progress.log("Using GITHUB_TOKEN authentication." if client.token else "No GITHUB_TOKEN set; using unauthenticated GitHub API requests.")
     index = load_or_discover_index(client, args.org, cache_dir, force_discovery, progress)
-    additions, errors = aggregate(client, index, period, progress)
+    repo_names = sync_repo_names(cache_dir, index, progress)
+    additions, release_notes, errors = aggregate(client, index, period, progress)
 
     if args.format == "json":
-        report = render_json(args.org, period, additions, errors)
+        report = render_json(args.org, period, additions, release_notes, repo_names, errors)
     else:
-        report = render_llm(args.org, period, additions, errors)
+        report = render_llm(args.org, period, additions, release_notes, repo_names, errors)
 
     output_path = args.output if args.output else default_output_path(cache_dir, args.format, period)
     write_report(output_path, report, progress)
-    save_state(cache_dir / STATE_FILE, args.org, period, index, additions, errors)
+    save_state(cache_dir / STATE_FILE, args.org, period, index, additions, release_notes, errors)
     progress.log(f"Wrote run state to {cache_dir / STATE_FILE}.")
-    return 1 if errors and not additions else 0
+    return 1 if errors and not additions and not release_notes else 0
 
 
 if __name__ == "__main__":

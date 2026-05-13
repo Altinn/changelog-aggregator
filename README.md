@@ -29,11 +29,17 @@ The first run discovers public repositories and stores changelog paths in:
 .changelog-aggregator/changelogs.json
 ```
 
+Discovery also records repositories that use GitHub-generated release notes via
+`.github/release.yml`. For those repositories, published release bodies inside
+the requested period are included alongside file-based changelog additions.
+
 Later runs reuse that file. Force rediscovery with:
 
 ```bash
 python3 changelog_aggregator.py --org altinn --week 2026-W20 --discover
 ```
+
+Use rediscovery after repositories add or remove `.github/release.yml`.
 
 Write to a specific report file:
 
@@ -54,8 +60,21 @@ python3 changelog_aggregator.py --org altinn --week 2026-W20 --format json
 ```
 
 The default `llm` format contains only metadata and added changelog lines from
-commits touching each discovered changelog file. It does not parse Markdown
-sections or infer release structure from changelog contents.
+commits touching each discovered changelog file, plus published GitHub release
+bodies for repositories configured with `.github/release.yml`. It does not
+parse Markdown sections or infer release structure from changelog contents.
+
+Repository display names are stored in:
+
+```text
+.changelog-aggregator/reponames.json
+```
+
+The file is generated automatically with each repository's full repository key
+as the default display name. Edit values manually to produce clearer
+human-facing digest headings without changing the repository identifiers. Multiple
+repositories may intentionally map to the same display name, which lets related
+subcomponents or split repositories collapse into one logical digest section.
 
 The script prints progress to stderr while it works, keeping stdout reserved for
 the report. Suppress progress output with:
@@ -75,7 +94,9 @@ python3 changelog_aggregator.py --org altinn --week 2026-W20 --max-rate-limit-re
 ## Turn Aggregation Output Into a Human Digest
 
 `prompt.txt` contains instructions for converting a machine-oriented aggregation
-run into a human-readable Markdown digest.
+run into a human-readable Markdown digest. It uses the repository display names
+embedded in the aggregation output and tells the LLM to append source issue or
+pull request links to matching summary bullets.
 
 Set the aggregation file you want to summarize:
 
@@ -86,16 +107,20 @@ RUN=.changelog-aggregator/runs/changelog-aggregation-2026-W20.txt
 Run Codex non-interactively and write the final Markdown message to `digest.md`:
 
 ```bash
-cat prompt.txt "$RUN" | codex exec -o digest.md -
+python3 digest_with_codex.py "$RUN" digest.md
 ```
 
 Run Claude Code non-interactively and redirect the Markdown output to
 `digest.md`:
 
 ```bash
-cat prompt.txt "$RUN" \
-  | claude -p "Follow the supplied instructions and return only the Markdown digest." \
-  > digest.md
+python3 digest_with_claude.py "$RUN" digest.md
 ```
+
+Both helper scripts:
+- load `prompt.txt`
+- replace `{{REPONAMES}}` using only overridden mappings from `.changelog-aggregator/reponames.json`, where an override means `key != value`
+- append the aggregation run content
+- invoke the selected agent in non-interactive mode
 
 Set `GITHUB_TOKEN` to increase GitHub API limits.

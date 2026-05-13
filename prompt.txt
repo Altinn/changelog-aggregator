@@ -2,9 +2,12 @@ You are given the output from a changelog aggregation run.
 
 The input is a machine-oriented text format. It contains:
 - Run metadata near the top, such as organization, ISO week when present, and date/timestamp period bounds.
+- Repository display-name mappings in `REPOSITORY DISPLAY NAMES` blocks. Multiple repositories may intentionally share the same display name.
 - One or more repository sections.
 - One or more commit sections per repository.
 - `ADDED_LINES_START` / `ADDED_LINES_END` blocks containing only lines newly added to changelog files.
+- Zero or more release-note sections.
+- `RELEASE_BODY_START` / `RELEASE_BODY_END` blocks containing published GitHub release-note Markdown.
 - Optional error sections.
 
 Your task is to turn that input into a concise, human-readable Markdown changelog digest.
@@ -20,7 +23,8 @@ Requirements:
   `# Altinn Changelog - {from_date} to {to_date}`
 
 2. Metadata summary
-- Add a short metadata section near the top.
+- Add a short metadata section at the very end of the Markdown document. 
+- It should not stand out, not use headers, and be visually separated from the rest of the content
 - Include:
   - organization
   - ISO week if present
@@ -47,20 +51,26 @@ Requirements:
 4. Detailed changes
 - Add a section titled:
   `## Detailed Changes`
-- Group details by repository.
+- Group details by repository display name.
 - For each repository, use:
-  `### <repo name>`
-- Under each repository, include only meaningful feature additions and notable bug fixes found in the added changelog lines.
+  `### <repo display name>`
+- Apply these repository header replacements when grouping detailed changes:
+  {{REPONAMES}}
+- If a repository is not listed in those replacements, fall back to the repository name.
+- If multiple repositories map to the same display name, combine their meaningful entries under one shared heading instead of creating duplicate sections.
+- When combining repositories under one heading, merge overlapping items where reasonable, but keep distinct changes as separate bullets.
+- Under each repository, include only meaningful feature additions and notable bug fixes found in the added changelog lines or release-note bodies.
 - Prefer short normalized bullets over copying raw changelog fragments.
 - Preserve important specificity where available, such as affected API area, workflow, integration, or user-visible behavior.
 - If a repository has no meaningful entries after filtering, omit that repository entirely.
+- When a summarized change has one or more issue or pull request links in the source text, append those links to the end of that summary bullet. Preserve the link target and use compact Markdown link text when possible.
 
 5. Provenance and caution
 - Base the summary only on the supplied input.
 - Do not invent missing context.
 - If an entry is ambiguous, summarize conservatively or omit it.
 - Do not treat commit messages alone as sufficient evidence unless they directly clarify clearly relevant changelog lines.
-- Changelog lines are primary; commit metadata is supporting context.
+- Changelog lines and release-note bodies are primary; commit and release metadata are supporting context.
 
 6. Style
 - Write for humans who want a useful digest, not an exhaustive audit trail.
