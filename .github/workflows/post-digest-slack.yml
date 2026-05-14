@@ -1,0 +1,82 @@
+name: Post digest to Slack
+
+on:
+  workflow_call:
+    inputs:
+      digest_artifact_name:
+        description: Artifact containing the Markdown digest.
+        required: false
+        default: codex-digest
+        type: string
+      artifact_run_id:
+        description: Workflow run ID containing the digest artifact. Defaults to the current run.
+        required: false
+        default: ""
+        type: string
+      digest_file:
+        description: Markdown digest file name.
+        required: false
+        default: digest.md
+        type: string
+    secrets:
+      SLACK_WEBHOOK_URL:
+        required: true
+  workflow_dispatch:
+    inputs:
+      digest_artifact_name:
+        description: Artifact containing the Markdown digest.
+        required: false
+        default: codex-digest
+        type: string
+      artifact_run_id:
+        description: Workflow run ID containing the digest artifact. Leave empty for the current run.
+        required: false
+        default: ""
+        type: string
+      digest_file:
+        description: Markdown digest file name.
+        required: false
+        default: digest.md
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  post-slack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.digest_artifact_name }}
+          run-id: ${{ inputs.artifact_run_id != '' && inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          path: .artifacts/digest
+
+      - name: Prepare Slack payload
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          digest_path = Path(".artifacts/digest") / "${{ inputs.digest_file }}"
+          digest = digest_path.read_text(encoding="utf-8")
+          max_chars = 3500
+          truncated = len(digest) > max_chars
+          text = digest[:max_chars]
+          if truncated:
+              text += "\n\n_Trimmed for Slack. See the GitHub Actions artifact for the full digest._"
+          payload = {
+              "text": f"Altinn changelog digest\n\n{text}\n\nWorkflow run: {os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          }
+          Path(".artifacts/slack-payload.json").write_text(json.dumps(payload), encoding="utf-8")
+
+      - name: Post digest to Slack
+        uses: slackapi/slack-github-action@v3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload-file-path: .artifacts/slack-payload.json

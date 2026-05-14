@@ -139,3 +139,22 @@ python3 build_digest_prompt.py "$RUN" .generated/codex-digest-prompt.md
 ```
 
 Set `GITHUB_TOKEN` to increase GitHub API limits.
+
+## GitHub Actions Automation
+
+The repository includes reusable workflows:
+
+- `aggregate-changelogs.yml`: runs `changelog_aggregator.py` for `altinn`, restores/saves `.changelog-aggregator/changelogs.json` through GitHub Actions cache, and uploads `changelog-index` and `aggregation-output` artifacts.
+- `build-digest-codex.yml`: downloads `aggregation-output`, builds a Codex prompt with `build_digest_prompt.py`, runs `openai/codex-action@v1`, and uploads `codex-digest`.
+- `post-digest-slack.yml`: downloads `codex-digest` and posts it to Slack.
+
+Two orchestration workflows are also included:
+
+- `manual-changelog.yml`: manually select ISO week, whether to rediscover, and whether to post to Slack.
+- `weekly-changelog.yml`: runs every Monday at `06:00 UTC` for the previous ISO week.
+
+Required repository secrets:
+
+- `ALTINN_GITHUB_TOKEN`: GitHub token used by the aggregator when calling the GitHub API.
+- `OPENAI_API_KEY`: used by `openai/codex-action@v1`.
+- `SLACK_WEBHOOK_URL`: Slack incoming webhook URL.

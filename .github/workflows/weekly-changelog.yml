@@ -1,0 +1,54 @@
+name: Weekly changelog digest
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  compute-week:
+    runs-on: ubuntu-latest
+    outputs:
+      week: ${{ steps.week.outputs.week }}
+    steps:
+      - name: Compute previous ISO week
+        id: week
+        shell: python
+        run: |
+          import os
+          from datetime import date, timedelta
+          previous_week_date = date.today() - timedelta(days=7)
+          iso = previous_week_date.isocalendar()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"week={iso.year}-W{iso.week:02d}\n")
+
+  aggregate:
+    needs: compute-week
+    uses: ./.github/workflows/aggregate-changelogs.yml
+    with:
+      week: ${{ needs.compute-week.outputs.week }}
+      discover: false
+    secrets:
+      ALTINN_GITHUB_TOKEN: ${{ secrets.ALTINN_GITHUB_TOKEN }}
+
+  build-digest:
+    needs: aggregate
+    uses: ./.github/workflows/build-digest-codex.yml
+    with:
+      aggregation_artifact_name: aggregation-output
+      output_file: digest.md
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+  post-slack:
+    needs: build-digest
+    uses: ./.github/workflows/post-digest-slack.yml
+    with:
+      digest_artifact_name: codex-digest
+      digest_file: digest.md
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

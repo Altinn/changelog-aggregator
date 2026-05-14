@@ -1,0 +1,52 @@
+name: Manual changelog digest
+
+on:
+  workflow_dispatch:
+    inputs:
+      week:
+        description: ISO 8601 week to aggregate, for example 2026-W20.
+        required: true
+        type: string
+      discover:
+        description: Force repository/changelog rediscovery.
+        required: false
+        default: false
+        type: boolean
+      post_to_slack:
+        description: Post the generated digest to Slack.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  aggregate:
+    uses: ./.github/workflows/aggregate-changelogs.yml
+    with:
+      week: ${{ inputs.week }}
+      discover: ${{ inputs.discover }}
+    secrets:
+      ALTINN_GITHUB_TOKEN: ${{ secrets.ALTINN_GITHUB_TOKEN }}
+
+  build-digest:
+    needs: aggregate
+    uses: ./.github/workflows/build-digest-codex.yml
+    with:
+      aggregation_artifact_name: aggregation-output
+      output_file: digest.md
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+  post-slack:
+    needs: build-digest
+    if: ${{ inputs.post_to_slack }}
+    uses: ./.github/workflows/post-digest-slack.yml
+    with:
+      digest_artifact_name: codex-digest
+      digest_file: digest.md
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+

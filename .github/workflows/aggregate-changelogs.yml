@@ -1,0 +1,103 @@
+name: Aggregate changelogs
+
+on:
+  workflow_call:
+    inputs:
+      week:
+        description: ISO 8601 week to aggregate, for example 2026-W20.
+        required: true
+        type: string
+      discover:
+        description: Force repository/changelog rediscovery.
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      ALTINN_GITHUB_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      week:
+        description: ISO 8601 week to aggregate, for example 2026-W20.
+        required: true
+        type: string
+      discover:
+        description: Force repository/changelog rediscovery.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    env:
+      WEEK: ${{ inputs.week }}
+      GITHUB_TOKEN: ${{ secrets.ALTINN_GITHUB_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Validate GitHub API token
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_TOKEN}" ]]; then
+            echo "ALTINN_GITHUB_TOKEN secret is required." >&2
+            exit 1
+          fi
+
+      - name: Restore changelog discovery cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .changelog-aggregator/changelogs.json
+          key: changelogs-altinn-v1-${{ github.run_id }}
+          restore-keys: |
+            changelogs-altinn-v1-
+
+      - name: Decide discovery mode
+        id: discovery
+        shell: bash
+        run: |
+          if [[ "${{ inputs.discover }}" == "true" || ! -f .changelog-aggregator/changelogs.json ]]; then
+            echo "args=--discover" >> "$GITHUB_OUTPUT"
+            echo "Discovery will run."
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "Using cached changelog discovery index."
+          fi
+
+      - name: Aggregate changelog input
+        run: |
+          python3 changelog_aggregator.py \
+            --org altinn \
+            --week "$WEEK" \
+            ${{ steps.discovery.outputs.args }}
+
+      - name: Upload changelog discovery index
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog-index
+          path: .changelog-aggregator/changelogs.json
+          if-no-files-found: error
+
+      - name: Save changelog discovery cache
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .changelog-aggregator/changelogs.json
+          key: changelogs-altinn-v1-${{ github.run_id }}
+
+      - name: Upload aggregation output
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregation-output
+          path: .changelog-aggregator/runs/changelog-aggregation-${{ inputs.week }}.txt
+          if-no-files-found: error

@@ -1,0 +1,99 @@
+name: Build Codex digest
+
+on:
+  workflow_call:
+    inputs:
+      aggregation_artifact_name:
+        description: Artifact containing the aggregation run output.
+        required: false
+        default: aggregation-output
+        type: string
+      artifact_run_id:
+        description: Workflow run ID containing the aggregation artifact. Defaults to the current run.
+        required: false
+        default: ""
+        type: string
+      output_file:
+        description: Markdown digest output file name.
+        required: false
+        default: digest.md
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      aggregation_artifact_name:
+        description: Artifact containing the aggregation run output.
+        required: false
+        default: aggregation-output
+        type: string
+      artifact_run_id:
+        description: Workflow run ID containing the aggregation artifact. Leave empty for the current run.
+        required: false
+        default: ""
+        type: string
+      output_file:
+        description: Markdown digest output file name.
+        required: false
+        default: digest.md
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Download aggregation artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.aggregation_artifact_name }}
+          run-id: ${{ inputs.artifact_run_id != '' && inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          path: .artifacts/aggregation
+
+      - name: Locate aggregation run file
+        id: locate-run
+        shell: bash
+        run: |
+          run_file="$(find .artifacts/aggregation -type f -name 'changelog-aggregation-*.txt' | sort | tail -n 1)"
+          if [[ -z "$run_file" ]]; then
+            echo "No changelog aggregation run file found in artifact." >&2
+            exit 1
+          fi
+          echo "run_file=$run_file" >> "$GITHUB_OUTPUT"
+
+      - name: Build Codex digest prompt
+        run: |
+          mkdir -p .generated
+          python3 build_digest_prompt.py \
+            "${{ steps.locate-run.outputs.run_file }}" \
+            .generated/codex-digest-prompt.md
+
+      - name: Run Codex
+        id: run-codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .generated/codex-digest-prompt.md
+          output-file: ${{ inputs.output_file }}
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Upload Codex digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-digest
+          path: ${{ inputs.output_file }}
+          if-no-files-found: error
