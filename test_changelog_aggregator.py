@@ -300,7 +300,6 @@ class ChangelogAggregatorTests(unittest.TestCase):
             RANGE_PERIOD,
             [addition],
             [],
-            {"altinn/example": "Readable Example"},
             [],
         )
 
@@ -310,8 +309,7 @@ class ChangelogAggregatorTests(unittest.TestCase):
         self.assertIn("TO_DATE: 2026-05-18", report)
         self.assertIn("===== REPOSITORY START =====", report)
         self.assertIn("REPO: altinn/example", report)
-        self.assertIn("REPO_DISPLAY_NAME: altinn/example => Readable Example", report)
-        self.assertIn("REPO_DISPLAY_NAME: Readable Example", report)
+        self.assertNotIn("REPO_DISPLAY_NAME", report)
         self.assertIn("ADDED_LINES_START\n## 1.0.0\n- Added\nADDED_LINES_END", report)
 
     def test_progress_writes_to_stderr_unless_quiet(self):
@@ -433,12 +431,11 @@ class ChangelogAggregatorTests(unittest.TestCase):
             RANGE_PERIOD,
             [],
             [release],
-            {"altinn/repo-a": "Readable Repo A"},
             [],
         )
 
         self.assertIn("===== RELEASE REPOSITORY START =====", report)
-        self.assertIn("REPO_DISPLAY_NAME: Readable Repo A", report)
+        self.assertNotIn("REPO_DISPLAY_NAME", report)
         self.assertIn("RELEASE_BODY_START", report)
         self.assertIn("issues/42", report)
 

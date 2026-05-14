@@ -627,7 +627,6 @@ def render_llm(
     period: Period,
     additions: list[ChangelogAddition],
     release_notes: list[ReleaseNote],
-    repo_names: dict[str, str],
     errors: list[dict[str, str]],
 ) -> str:
     output = [
@@ -641,10 +640,6 @@ def render_llm(
     ]
     if period.week:
         output.append(f"ISO_WEEK: {period.week}")
-    output.extend(["", "===== REPOSITORY DISPLAY NAMES START ====="])
-    for repo, display_name in sorted(repo_names.items(), key=lambda item: item[0].lower()):
-        output.append(f"REPO_DISPLAY_NAME: {repo} => {display_name}")
-    output.append("===== REPOSITORY DISPLAY NAMES END =====")
 
     current_repo = None
     for addition in additions:
@@ -655,7 +650,6 @@ def render_llm(
                     "",
                     "===== REPOSITORY START =====",
                     f"REPO: {addition.repo}",
-                    f"REPO_DISPLAY_NAME: {repo_names.get(addition.repo, addition.repo.rsplit('/', 1)[-1])}",
                     f"REPO_URL: {addition.repo_url}",
                     f"CHANGELOG_PATH: {addition.path}",
                     f"CHANGELOG_URL: {addition.file_url}",
@@ -688,7 +682,6 @@ def render_llm(
                     "",
                     "===== RELEASE REPOSITORY START =====",
                     f"REPO: {release.repo}",
-                    f"REPO_DISPLAY_NAME: {repo_names.get(release.repo, release.repo.rsplit('/', 1)[-1])}",
                     f"REPO_URL: {release.repo_url}",
                     "===== RELEASE NOTES =====",
                 ]
@@ -732,7 +725,6 @@ def render_json(
     period: Period,
     additions: list[ChangelogAddition],
     release_notes: list[ReleaseNote],
-    repo_names: dict[str, str],
     errors: list[dict[str, str]],
 ) -> str:
     payload = {
@@ -745,7 +737,6 @@ def render_json(
             "fromTimestamp": period.start.isoformat().replace("+00:00", "Z"),
             "toTimestamp": period.end.isoformat().replace("+00:00", "Z"),
         },
-        "repositoryDisplayNames": repo_names,
         "additions": [asdict(addition) for addition in additions],
         "releaseNotes": [asdict(release_note) for release_note in release_notes],
         "errors": errors,
@@ -840,13 +831,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     progress.log("Using GITHUB_TOKEN authentication." if client.token else "No GITHUB_TOKEN set; using unauthenticated GitHub API requests.")
     index = load_or_discover_index(client, args.org, cache_dir, force_discovery, progress)
-    repo_names = sync_repo_names(Path(REPO_NAMES_FILE), index, progress, args.refresh_reponames)
+    sync_repo_names(Path(REPO_NAMES_FILE), index, progress, args.refresh_reponames)
     additions, release_notes, errors = aggregate(client, index, period, progress)
 
     if args.format == "json":
-        report = render_json(args.org, period, additions, release_notes, repo_names, errors)
+        report = render_json(args.org, period, additions, release_notes, errors)
     else:
-        report = render_llm(args.org, period, additions, release_notes, repo_names, errors)
+        report = render_llm(args.org, period, additions, release_notes, errors)
 
     output_path = args.output if args.output else default_output_path(cache_dir, args.format, period)
     write_report(output_path, report, progress)
