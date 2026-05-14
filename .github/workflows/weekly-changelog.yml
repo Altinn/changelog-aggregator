@@ -1,8 +1,9 @@
 name: Weekly changelog digest
 
 on:
-  schedule:
-    - cron: "0 6 * * 1"
+  # Re-enable the schedule when API quota/billing for Codex automation is ready.
+  # schedule:
+  #   - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
